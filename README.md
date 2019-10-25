@@ -1,0 +1,2 @@
+# merakicli
+Meraki Dashboard CLI
