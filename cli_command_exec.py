@@ -36,7 +36,7 @@ def resolve_arg(arg, datalist):
     for x in datalist:
         # print(x)
         for y in x:
-            if y.lower() == arg.lower():
+            if y and y.lower() == arg.lower():
                 retval = x
                 break
 
@@ -78,8 +78,8 @@ def resolve_arg(arg, datalist):
     return retval
 
 
-def exec_quit(self, line, context):
-    return True
+def exec_quit(data, clitext, contextchain):
+    return "", []
 
 
 def get_org_raw():
@@ -269,16 +269,16 @@ def get_config_data(scope, elemid, context_chain):
         return parse_json_struct(scope, data)
     elif scope == "device":
         try:
-            data = client.devices.get_network_device({"network_id": context_chain[len(context_chain)-2]["selected_item"], "serial": elemid})
+            data = client.devices.get_network_device({"network_id": context_chain[len(context_chain)-3]["selected"], "serial": elemid})
         except APIException as e:
             print(f'Error {e.response_code} with error message {e.context.response.raw_body}')
             return ""
 
         return parse_json_struct(scope, data)
     elif scope == "interface":
-        netid = context_chain[len(context_chain) - 3]["selected_item"]
-        devid = context_chain[len(context_chain) - 2]["selected_item"]
-        intname = context_chain[len(context_chain) - 1]["selected_item"]
+        netid = context_chain[len(context_chain) - 4]["selected"]
+        devid = context_chain[len(context_chain) - 3]["selected"]
+        intname = context_chain[len(context_chain) - 2]["selected"]
         if "Ethernet" in intname:
             intnum = intname.replace("Ethernet", "")
             try:
@@ -321,44 +321,45 @@ def get_config_data(scope, elemid, context_chain):
         return "Unable to show configuration for scope " + scope
 
 
-def exec_show_parse(self, list_line, context_chain):
-    line = " ".join(list_line)
-    curscope = context_chain[len(context_chain)-1]["scope"]
-    if curscope == "root" and (line in "organizations" or line in "orgs"):
+def exec_show_parse(data, clitext, contextchain):
+    # sample data:
+    # [{'command': 'organizations', 'help': 'show list of organizations'}, '', [], 'exec_show_parse', 'root']
+    curscope = data["context"]
+    curcmd = data["command"]["command"]
+    list_line = clitext.split(" ")[1:]
+    if curscope == "root" and curcmd == "organizations":
         outdata = get_org_raw()
-        self.execdata = outdata
-        return format_data(outdata)
-    elif curscope == "organization" and (line in "networks" or line in "nets"):
-        outdata = get_net_raw(context_chain[len(context_chain)-1]["selected_item"])
-        self.execdata = outdata
-        return format_data(outdata)
-    elif curscope == "network" and (line in "devices" or line in "devs"):
-        outdata = get_dev_raw(context_chain[len(context_chain)-1]["selected_item"])
-        self.execdata = outdata
-        return format_data(outdata)
-    elif curscope == "device" and (line in "interfaces" or line in "ints"):
-        prevdev = context_chain[len(context_chain) - 1]["selected_item"]
-        r = resolve_arg(prevdev, context_chain[len(context_chain) - 2]["dataset"])
-        outdata = get_int_raw(r, context_chain[len(context_chain) - 3]["selected_item"], context_chain[len(context_chain) - 2]["selected_item"], context_chain[len(context_chain) - 1]["selected_item"])
-        self.execdata = outdata
-        return format_data(outdata)
-    elif line in "configuration":
-        return get_config_data(curscope, context_chain[len(context_chain)-1]["selected_item"], context_chain)
-    elif line in "debug context":
-        return str(json.dumps(context_chain))
+        contextchain[len(contextchain)-1]["elements"] = outdata
+        return format_data(outdata), contextchain
+    elif curscope == "organization" and curcmd == "networks":
+        outdata = get_net_raw(contextchain[len(contextchain)-2]["selected"])
+        return format_data(outdata), contextchain
+    elif curscope == "network" and curcmd == "devices":
+        outdata = get_dev_raw(contextchain[len(contextchain)-2]["selected"])
+        return format_data(outdata), contextchain
+    elif curscope == "device" and curcmd == "interfaces":
+        prevdev = contextchain[len(contextchain)-2]["selected"]
+        r = resolve_arg(prevdev, contextchain[len(contextchain)-2]["elements"])
+        outdata = get_int_raw(r, contextchain[len(contextchain)-4]["selected"], contextchain[len(contextchain)-3]["selected"], contextchain[len(contextchain)-2]["selected"])
+        return format_data(outdata), contextchain
+    elif data["remains"] in "configuration":
+        return get_config_data(curscope, contextchain[len(contextchain)-2]["selected"], contextchain), contextchain
+    elif len(list_line) == 2 and list_line[0] in "debug" and list_line[1] in "context":
+        return str(json.dumps(contextchain)), contextchain
+    elif clitext.find("?") >= 0:
+        return None, contextchain
     else:
-        return "Unknown argument: " + line
+        return "Unknown argument: " + clitext, contextchain
 
 
-def exec_context_org(self, list_line, context_chain):
-    line = " ".join(list_line)
-
-    if self.execdata is None:
+def exec_context_org(data, clitext, contextchain):
+    line = data["remains"]
+    if contextchain[len(contextchain)-1]["elements"] is None:
         e = get_org_raw()
-        self.execdata = e
+        contextchain[len(contextchain)-1]["elements"] = e
         r = resolve_arg(line, e)
     else:
-        r = resolve_arg(line, self.execdata)
+        r = resolve_arg(line, contextchain[len(contextchain)-1]["elements"])
 
     if not r:
         orgname = str(line).strip()
@@ -367,144 +368,142 @@ def exec_context_org(self, list_line, context_chain):
             data = client.organizations.create_organization(orgname)
         except APIException as e:
             print(f'Error {e.response_code} with error message {e.context.response.raw_body}')
-            return ""
+            return "", contextchain
 
         e = get_org_raw()
-        self.execdata = e
+        contextchain[len(contextchain)-1]["elements"] = e
         r = resolve_arg(orgname, e)
 
-    self.temp_context_desc = "Org-" + r[2] + "#"
-    self.temp_context = "organization"
-    self.temp_id = r[1]
-    self.exit_code = 998
-    return True
+    contextchain[len(contextchain) - 1]["selected_data"] = r
+    contextchain[len(contextchain) - 1]["selected"] = r[1]
+    temp_context_desc = "Org-" + r[2] + "#"
+    temp_context = "organization"
+    contextchain.append({"prompt": temp_context_desc, "contextname": temp_context, "elements": None, "selected": None, "selected_data": None})
+    return "", contextchain
 
 
-def exec_context_net(self, list_line, context_chain):
-    line = " ".join(list_line)
-    if self.execdata is None:
-        e = get_net_raw(context_chain[len(context_chain)-1]["selected_item"])
-        self.execdata = e
+def exec_context_net(data, clitext, contextchain):
+    line = data["remains"]
+    if contextchain[len(contextchain)-1]["elements"] is None:
+        e = get_net_raw(contextchain[len(contextchain)-2]["selected"])
+        contextchain[len(contextchain)-1]["elements"] = e
         r = resolve_arg(line, e)
     else:
-        r = resolve_arg(line, self.execdata)
+        r = resolve_arg(line, contextchain[len(contextchain)-1]["elements"])
 
     if not r:
         netname = str(line).strip()
         print("Unable to locate a Network with the identifier '" + str(line) + "'. Creating one...")
         try:
-            data = client.networks.create_organization_network({"organization_id": context_chain[len(context_chain)-1]["selected_item"], "create_organization_network": {"name": netname, "type": default_net_type, "tags": "", "time_zone": default_time_zone}})
+            data = client.networks.create_organization_network({"organization_id": contextchain[len(context_chain)-2]["selected"], "create_organization_network": {"name": netname, "type": default_net_type, "tags": "", "time_zone": default_time_zone}})
         except APIException as e:
             print(f'Error {e.response_code} with error message {e.context.response.raw_body}')
-            return ""
+            return "", contextchain
 
-        e = get_net_raw(context_chain[len(context_chain)-1]["selected_item"])
-        self.execdata = e
+        e = get_net_raw(contextchain[len(context_chain)-2]["selected"])
+        contextchain[len(contextchain)-1]["elements"] = e
         r = resolve_arg(netname, e)
 
-    self.temp_context_desc = context_chain[len(context_chain)-1]["prompt"][:-1] + "/Net-" + r[3] + "#"
-    self.temp_context = "network"
-    self.temp_id = r[1]
-    self.exit_code = 998
-    return True
+    contextchain[len(contextchain) - 1]["selected_data"] = r
+    contextchain[len(contextchain) - 1]["selected"] = r[1]
+    temp_context_desc = contextchain[len(contextchain)-1]["prompt"][:-1] + "/Net-" + r[3] + "#"
+    temp_context = "network"
+    contextchain.append({"prompt": temp_context_desc, "contextname": temp_context, "elements": None, "selected": None, "selected_data": None})
+    return "", contextchain
 
 
-def exec_context_dev(self, list_line, context_chain):
-    line = " ".join(list_line)
-    if self.execdata is None:
-        e = get_dev_raw(context_chain[len(context_chain)-1]["selected_item"])
-        self.execdata = e
+def exec_context_dev(data, clitext, contextchain):
+    line = data["remains"]
+    if contextchain[len(contextchain)-1]["elements"] is None:
+        e = get_dev_raw(contextchain[len(contextchain)-2]["selected"])
+        contextchain[len(contextchain)-1]["elements"] = e
         r = resolve_arg(line, e)
     else:
-        r = resolve_arg(line, self.execdata)
+        r = resolve_arg(line, contextchain[len(contextchain)-1]["elements"])
 
     if not r:
-        return "Unable to locate a Device with the identifier '" + str(line) + "'. To claim a new Device, use the command 'network claim <device-serial-number>'."
+        return "Unable to locate a Device with the identifier '" + str(line) + "'. To claim a new Device, use the command 'network claim <device-serial-number>'.", contextchain
 
-    self.temp_context_desc = context_chain[len(context_chain)-1]["prompt"][:-1] + "/Dev-" + r[1] + "#"
-    self.temp_context = "device"
-    self.temp_id = r[1]
-    self.exit_code = 998
-    return True
+    contextchain[len(contextchain) - 1]["selected_data"] = r
+    contextchain[len(contextchain) - 1]["selected"] = r[1]
+    temp_context_desc = contextchain[len(contextchain)-1]["prompt"][:-1] + "/Dev-" + r[1] + "#"
+    temp_context = "device"
+    contextchain.append({"prompt": temp_context_desc, "contextname": temp_context, "elements": None, "selected": None, "selected_data": None})
+    return "", contextchain
 
 
-def exec_context_int(self, list_line, context_chain):
-    line = " ".join(list_line)
-    if self.execdata is None:
-        prevdev = context_chain[len(context_chain) - 1]["selected_item"]
-        r = resolve_arg(prevdev, context_chain[len(context_chain) - 2]["dataset"])
-        e = get_int_raw(r, context_chain[len(context_chain) - 3]["selected_item"],
-                              context_chain[len(context_chain) - 2]["selected_item"],
-                              context_chain[len(context_chain) - 1]["selected_item"])
+def exec_context_int(data, clitext, contextchain):
+    line = data["remains"]
+    if contextchain[len(contextchain)-1]["elements"] is None:
+        prevdev = contextchain[len(contextchain)-2]["selected"]
+        r = resolve_arg(prevdev, contextchain[len(contextchain)-2]["elements"])
+        e = get_int_raw(r, contextchain[len(contextchain)-4]["selected"],
+                              contextchain[len(contextchain)-3]["selected"],
+                              contextchain[len(contextchain)-2]["selected"])
 
-        self.execdata = e
+        contextchain[len(contextchain)-1]["elements"] = e
         r = resolve_arg(line, e)
     else:
-        r = resolve_arg(line, self.execdata)
+        r = resolve_arg(line, contextchain[len(contextchain)-1]["elements"])
 
     if not r:
-        return "Unable to locate an Interface with the identifier '" + str(line) + "'."
+        return "Unable to locate an Interface with the identifier '" + str(line) + "'.", contextchain
 
-    self.temp_context_desc = context_chain[len(context_chain)-1]["prompt"][:-1] + "/Int-" + r[1] + "#"
-    self.temp_context = "interface"
-    self.temp_id = r[1]
-    self.exit_code = 998
-    return True
-
-
-def exec_up_context(self, list_line, context_chain):
-    prevctx = context_chain[len(context_chain)-2]
-    self.temp_context_desc = prevctx["prompt"]
-    self.temp_context = prevctx["scope"]
-    self.temp_id = prevctx["selected_item"]
-    self.exit_code = 997
-    return True
+    contextchain[len(contextchain) - 1]["selected_data"] = r
+    contextchain[len(contextchain) - 1]["selected"] = r[1]
+    temp_context_desc = contextchain[len(contextchain)-1]["prompt"][:-1] + "/Int-" + r[1] + "#"
+    temp_context = "interface"
+    contextchain.append({"prompt": temp_context_desc, "contextname": temp_context, "elements": None, "selected": None, "selected_data": None})
+    return "", contextchain
 
 
-def exec_root_context(self, list_line, context_chain):
-    prevctx = context_chain[0]
-    self.temp_context_desc = prevctx["prompt"]
-    self.temp_context = prevctx["scope"]
-    self.temp_id = prevctx["selected_item"]
-    self.exit_code = 996
-    return True
+def exec_up_context(data, clitext, contextchain):
+    outcx = contextchain[:-1]
+    outcx[len(outcx)-1]["selected"] = None
+    outcx[len(outcx)-1]["selected_data"] = None
+    return "", outcx
 
 
-def exec_handle_disable(self, list_line, context_chain):
-    handle_port_toggle(self, list_line, context_chain, False)
-    self.exit_code = 999
-    return True
+def exec_root_context(data, clitext, contextchain):
+    outcx = contextchain[0]
+    outcx["selected"] = None
+    outcx["selected_data"] = None
+    return "", [outcx]
 
 
-def exec_handle_no(self, list_line, context_chain):
-    line = " ".join(list_line)
-    curscope = context_chain[len(context_chain)-1]["scope"]
+def exec_handle_disable(data, clitext, contextchain):
+    handle_port_toggle(data["remains"], contextchain, False)
+    return "", contextchain
+
+
+def exec_handle_no(data, clitext, contextchain):
+    line = data["remains"]
+    list_line = line.split(" ")
+    curscope = contextchain[len(contextchain)-1]["contextname"]
     if curscope == "interface" and line in "shutdown":
-        handle_port_toggle(self, list_line, context_chain, True)
+        handle_port_toggle(list_line, contextchain, True)
     elif curscope == "root" and list_line[0] in "organization":
         print("Unable to delete Organization: No API Coverage.")
     elif curscope == "organization" and list_line[0] in "network":
-        arg = " ".join(list_line[1:])
-        if self.execdata is None:
-            e = get_net_raw(context_chain[len(context_chain) - 1]["selected_item"])
-            self.execdata = e
-            r = resolve_arg(arg, e)
+        if contextchain[len(contextchain)-1]["elements"] is None:
+            e = get_net_raw(contextchain[len(contextchain) - 2]["selected"])
+            contextchain[len(contextchain)-1]["elements"] = e
+            r = resolve_arg(line, e)
         else:
-            r = resolve_arg(arg, self.execdata)
+            r = resolve_arg(line, contextchain[len(contextchain)-1]["elements"])
         try:
             data = client.networks.delete_network(r[1])
         except APIException as e:
             print(f'Error {e.response_code} with error message {e.context.response.raw_body}')
             return ""
 
-    self.exit_code = 999
-    return True
+    return "", contextchain
 
 
-def handle_port_toggle(self, list_line, context_chain, port_enabled):
-    prevnet = context_chain[len(context_chain) - 3]["selected_item"]
-    prevdev = context_chain[len(context_chain) - 2]["selected_item"]
-    prevint = context_chain[len(context_chain) - 1]["selected_item"]
+def handle_port_toggle(list_line, context_chain, port_enabled):
+    prevnet = context_chain[len(context_chain) - 4]["selected"]
+    prevdev = context_chain[len(context_chain) - 3]["selected"]
+    prevint = context_chain[len(context_chain) - 2]["selected"]
     if "Ethernet" in prevint:
         intnum = str(prevint.replace("Ethernet", ""))
         try:
@@ -544,10 +543,14 @@ def handle_port_toggle(self, list_line, context_chain, port_enabled):
 
         return ""
     else:
-        print(prevdev, prevint)
+        # print(prevdev, prevint)
+        pass
+
+    return None
 
 
-def switch_context(self, list_line, context_chain):
+def switch_context(data, clitext, contextchain):
+    list_line = clitext.split(" ")[1:]
     out_chain = []
     orgid = None
     netid = None
@@ -558,36 +561,42 @@ def switch_context(self, list_line, context_chain):
     line = " ".join(list_line)
     ctxlist = line.split("/")
     for ctx in ctxlist:
-        ctxname = "-".join(ctx.split("-")[1:])
+        ctxname = "-".join(ctx.split("-")[1:]).strip()
         typectx = ctx.replace(ctxname, "").replace("-", "")
         if typectx.lower() == "org":
             orgdata = get_org_raw()
             r = resolve_arg(ctxname, orgdata)
             if r: orgid = str(r[1])
-            out_chain.append({"scope": curcontext, "prompt": "#", "dataset": orgdata, "selected_item": None, "selected_data": r})
+            out_chain.append({"prompt": "#", "contextname": curcontext, "elements": orgdata, "selected": orgid, "selected_data": r})
             curcontext = "organization"
+            out_chain.append({"prompt": "Org-" + out_chain[len(out_chain)-1]["selected_data"][2] + "#", "contextname": curcontext, "elements": None, "selected": None, "selected_data": None})
         elif typectx.lower() == "net" and orgid is not None:
             netdata = get_net_raw(orgid)
             r = resolve_arg(ctxname, netdata)
             if r: netid = str(r[1])
-            out_chain.append({"scope": curcontext, "prompt": "Org-" + out_chain[len(out_chain)-1]["selected_data"][2] + "#", "dataset": netdata, "selected_item": out_chain[len(out_chain)-1]["selected_data"][1], "selected_data": r})
+            out_chain[len(out_chain)-1]["elements"] = netdata
+            out_chain[len(out_chain)-1]["selected"] = netid
+            out_chain[len(out_chain)-1]["selected_data"] = r
             curcontext = "network"
+            out_chain.append({"prompt": out_chain[len(out_chain)-1]["prompt"][:-1] + "/Net-" + out_chain[len(out_chain)-1]["selected_data"][3] + "#", "contextname": curcontext, "elements": None, "selected": None, "selected_data": None})
         elif typectx.lower() == "dev" and netid is not None:
             devdata = get_dev_raw(netid)
             r = resolve_arg(ctxname, devdata)
             if r: devid = str(r[1])
-            out_chain.append({"scope": curcontext, "prompt": out_chain[len(out_chain)-1]["prompt"][:-1] + "/Net-" + out_chain[len(out_chain)-1]["selected_data"][3] + "#", "dataset": devdata, "selected_item": out_chain[len(out_chain)-1]["selected_data"][1], "selected_data": r})
+            # print(ctx, ctxname, netid, devdata, devid)
+            out_chain[len(out_chain)-1]["elements"] = devdata
+            out_chain[len(out_chain)-1]["selected"] = devid
+            out_chain[len(out_chain)-1]["selected_data"] = r
             curcontext = "device"
+            out_chain.append({"prompt": out_chain[len(out_chain)-1]["prompt"][:-1] + "/Dev-" + out_chain[len(out_chain)-1]["selected_data"][1] + "#", "contextname": curcontext, "elements": None, "selected": None, "selected_data": None})
         elif typectx.lower() == "int" and devid is not None:
-            intdata = get_int_raw(out_chain[len(out_chain)-1]["selected_data"], orgid, netid, devid)
+            intdata = get_int_raw(out_chain[len(out_chain)-2]["selected_data"], orgid, netid, devid)
             r = resolve_arg(ctxname, intdata)
             if r: intnum = str(r[1])
-            out_chain.append({"scope": curcontext, "prompt": out_chain[len(out_chain)-1]["prompt"][:-1] + "/Dev-" + out_chain[len(out_chain)-1]["selected_data"][1] + "#", "dataset": intdata, "selected_item": out_chain[len(out_chain)-1]["selected_data"][1], "selected_data": r})
+            out_chain[len(out_chain)-1]["elements"] = intdata
+            out_chain[len(out_chain)-1]["selected"] = intnum
+            out_chain[len(out_chain)-1]["selected_data"] = r
             curcontext = "interface"
-            out_chain.append({"scope": curcontext, "prompt": out_chain[len(out_chain)-1]["prompt"][:-1] + "/Int-" + out_chain[len(out_chain)-1]["selected_data"][1] + "#", "dataset": None, "selected_item": intnum, "selected_data": None})
+            out_chain.append({"prompt": out_chain[len(out_chain)-1]["prompt"][:-1] + "/Int-" + out_chain[len(out_chain)-1]["selected_data"][1] + "#", "contextname": curcontext, "elements": None, "selected": None, "selected_data": None})
 
-    self.temp_context_desc = line + "#"
-    self.temp_context = curcontext
-    self.temp_context_chain = out_chain
-    self.exit_code = 995
-    return True
+    return "", out_chain
