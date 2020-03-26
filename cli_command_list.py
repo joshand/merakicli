@@ -61,7 +61,7 @@ context["root"] = [
 context["organization"] = [
     {
         "command": "show",
-        "subcommands": [{"command": "networks", "help": "show list of networks"}, {"command": "configurations", "help": "show organization configuration"}],
+        "subcommands": [{"command": "networks", "help": "show list of networks"}, {"command": "configuration", "help": "show organization configuration"}],
         "function": "exec_show_parse",
         "help": "show ['networks', 'configuration']"
     },
@@ -74,7 +74,7 @@ context["organization"] = [
 context["network"] = [
     {
         "command": "show",
-        "subcommands": [{"command": "devices", "help": "show list of devices"}, {"command": "configurations", "help": "show network configuration"}],
+        "subcommands": [{"command": "devices", "help": "show list of devices"}, {"command": "configuration", "help": "show network configuration"}],
         "function": "exec_show_parse",
         "help": "show ['devices', 'configuration']"
     },
@@ -87,7 +87,7 @@ context["network"] = [
 context["device"] = [
     {
         "command": "show",
-        "subcommands": [{"command": "interfaces", "help": "show list of interfaces"}, {"command": "configurations", "help": "show device configuration"}],
+        "subcommands": [{"command": "interfaces", "help": "show list of interfaces"}, {"command": "configuration", "help": "show device configuration"}],
         "function": "exec_show_parse",
         "help": "show ['interfaces', 'configuration']"
     },
@@ -100,7 +100,7 @@ context["device"] = [
 context["interface"] = [
     {
         "command": "show",
-        "subcommands": [{"command": "configurations", "help": "show interface configuration"}],
+        "subcommands": [{"command": "configuration", "help": "show interface configuration"}],
         "function": "exec_show_parse",
         "help": "show ['configuration']"
     },
